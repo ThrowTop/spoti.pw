@@ -48,6 +48,8 @@ UIViewController *SGAboutPage(void) {
             SGStatRow(@"Spotify", ^NSString *{ return spotify; }),
             withSymbol(SGActionRow(@"Test local network access", @"Check multicast access used for Cast discovery", ^{ SGShowMulticastDiagnostic(); }),
                        @"antenna.radiowaves.left.and.right"),
+            withSymbol(SGActionRow(@"Test Connect discovery", @"Browse for nearby Spotify Connect receivers", ^{ SGShowConnectBonjourDiagnostic(); }),
+                       @"hifispeaker"),
         ]),
         SGSection(nil, @[
             withSymbol(SGLinkRow(@"Website", nil, SGSiteURL), @"safari"),

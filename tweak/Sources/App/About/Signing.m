@@ -109,6 +109,93 @@ void SGShowMulticastDiagnostic(void) {
     [SGTopController() presentViewController:alert animated:YES completion:nil];
 }
 
+// Apple can browse a named Bonjour service without the broad multicast entitlement. Compare this
+// result with Spotify's Connect sheet to distinguish LAN visibility from Spotify's own discovery.
+@interface SGConnectBonjourProbe : NSObject <NSNetServiceBrowserDelegate>
+@property (nonatomic, strong) NSNetServiceBrowser *browser;
+@property (nonatomic, strong) NSMutableOrderedSet<NSString *> *names;
+@property (nonatomic, strong) UIAlertController *alert;
+@property (nonatomic, strong) UIAlertAction *copyAction;
+@property (nonatomic, copy) NSString *result;
+@property (nonatomic, copy) NSString *error;
+@property (nonatomic, assign) BOOL finished;
+- (void)start;
+- (void)stop;
+@end
+
+static SGConnectBonjourProbe *sgConnectBonjourProbe;
+
+@implementation SGConnectBonjourProbe
+
+- (void)start {
+    self.names = [NSMutableOrderedSet orderedSet];
+    self.browser = [NSNetServiceBrowser new];
+    self.browser.delegate = self;
+    [self.browser searchForServicesOfType:@"_spotify-connect._tcp." inDomain:@"local."];
+
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(7 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [weakSelf finish];
+    });
+}
+
+- (void)stop {
+    self.finished = YES;
+    [self.browser stop];
+    self.browser.delegate = nil;
+    self.browser = nil;
+    if (sgConnectBonjourProbe == self) sgConnectBonjourProbe = nil;
+}
+
+- (void)finish {
+    if (self.finished) return;
+    NSArray<NSString *> *names = [self.names.array sortedArrayUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
+    NSString *detail = names.count ? [names componentsJoinedByString:@"\n"] : @"No Spotify Connect services found.";
+    if (self.error) detail = [detail stringByAppendingFormat:@"\nBrowser error: %@", self.error];
+    self.result = [NSString stringWithFormat:@"Bonjour _spotify-connect._tcp:\n%@", detail];
+    SGLog(@"Connect Bonjour diagnostic: %@", self.result);
+    self.alert.message = self.result;
+    self.copyAction.enabled = YES;
+    [self stop];
+}
+
+- (void)netServiceBrowser:(NSNetServiceBrowser *)browser didFindService:(NSNetService *)service moreComing:(BOOL)moreComing {
+    [self.names addObject:service.name];
+}
+
+- (void)netServiceBrowser:(NSNetServiceBrowser *)browser didNotSearch:(NSDictionary<NSString *, NSNumber *> *)errorDict {
+    self.error = errorDict.description;
+    [self finish];
+}
+
+@end
+
+void SGShowConnectBonjourDiagnostic(void) {
+    UIViewController *top = SGTopController();
+    if (!top) return;
+    [sgConnectBonjourProbe stop];
+    SGConnectBonjourProbe *probe = [SGConnectBonjourProbe new];
+    sgConnectBonjourProbe = probe;
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Spotify Connect discovery"
+                                                                   message:@"Looking for nearby receivers for seven seconds…"
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    probe.alert = alert;
+    __weak SGConnectBonjourProbe *weakProbe = probe;
+    __weak UIAlertController *weakAlert = alert;
+    UIAlertAction *copy = [UIAlertAction actionWithTitle:@"Copy result" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        UIPasteboard.generalPasteboard.string = weakAlert.message;
+    }];
+    copy.enabled = NO;
+    probe.copyAction = copy;
+    [alert addAction:copy];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Done" style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
+        [weakProbe stop];
+    }]];
+    [top presentViewController:alert animated:YES completion:^{
+        [probe start];
+    }];
+}
+
 // Unreadable counts as fine: a guess here would cry wolf at a build that works.
 BOOL SGSigningOpensFromLockScreen(void) {
     NSString *appID = SGSigningAppIdentifier();
