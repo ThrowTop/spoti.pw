@@ -112,7 +112,8 @@ contribution; it is ticked once, before the first pull request is merged.
 
 [cyan](https://github.com/asdfzxcvbn/pyzule-rw) injects, [Theos](https://theos.dev) builds, and
 [FLEX](https://github.com/FLEXTool/FLEX), as hopeless's AutoFLEX build in `vendor/`, is the inspector
-the view trees are read through.
+the view trees are read through. The ad blocking and the Premium state are ported from
+[EeveeSpotify Reincarnated](https://github.com/SideloadLabs/EeveeSpotifyReincarnated).
 
 ## License
 
