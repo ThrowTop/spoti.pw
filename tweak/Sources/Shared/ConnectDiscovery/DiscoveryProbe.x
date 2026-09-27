@@ -8,6 +8,7 @@
 #import <string.h>
 #import <sys/socket.h>
 #import <sys/time.h>
+#import <sys/uio.h>
 #import <unistd.h>
 
 static ssize_t (*sg_originalSendTo)(int, const void *, size_t, int, const struct sockaddr *, socklen_t);
@@ -16,6 +17,8 @@ static ssize_t (*sg_originalSend)(int, const void *, size_t, int);
 static ssize_t (*sg_originalRecvFrom)(int, void *, size_t, int, struct sockaddr *, socklen_t *);
 static ssize_t (*sg_originalRecvMsg)(int, struct msghdr *, int);
 static ssize_t (*sg_originalRecv)(int, void *, size_t, int);
+static ssize_t (*sg_originalRead)(int, void *, size_t);
+static ssize_t (*sg_originalReadV)(int, const struct iovec *, int);
 static NSObject *sg_probeLock;
 static NSString *sg_lastAttempt;
 static NSUInteger sg_attempts;
@@ -25,6 +28,8 @@ static BOOL sg_hookedSend;
 static BOOL sg_hookedRecvFrom;
 static BOOL sg_hookedRecvMsg;
 static BOOL sg_hookedRecv;
+static BOOL sg_hookedRead;
+static BOOL sg_hookedReadV;
 static NSMutableArray<NSDictionary *> *sg_bonjourTargets;
 static NSUInteger sg_injectedResponses;
 static NSUInteger sg_receivedInjectedResponses;
@@ -78,7 +83,7 @@ static BOOL matchInjectedPacket(const void *bytes, size_t length, struct sockadd
                 continue;
             }
             NSData *expected = entry[@"bytes"];
-            if (expected.length != length || memcmp(expected.bytes, bytes, length) != 0) continue;
+            if (length > expected.length || memcmp(expected.bytes, bytes, length) != 0) continue;
 
             if (source && sourceLength && isLoopbackSource(source, *sourceLength)) {
                 const struct sockaddr_in *ipv4 = [entry[@"source"] bytes];
@@ -345,18 +350,43 @@ static ssize_t probeRecv(int fd, void *bytes, size_t length, int flags) {
     return result;
 }
 
+static ssize_t probeRead(int fd, void *bytes, size_t length) {
+    ssize_t result = sg_originalRead(fd, bytes, length);
+    if (result > 0) matchInjectedPacket(bytes, (size_t)result, NULL, NULL);
+    return result;
+}
+
+static ssize_t probeReadV(int fd, const struct iovec *iov, int iovCount) {
+    ssize_t result = sg_originalReadV(fd, iov, iovCount);
+    if (result <= 0 || !iov) return result;
+    NSMutableData *bytes = [NSMutableData dataWithLength:(NSUInteger)result];
+    size_t copied = 0;
+    for (int i = 0; i < iovCount && copied < (size_t)result; i++) {
+        size_t part = MIN(iov[i].iov_len, (size_t)result - copied);
+        memcpy((char *)bytes.mutableBytes + copied, iov[i].iov_base, part);
+        copied += part;
+    }
+    if (copied == (size_t)result) matchInjectedPacket(bytes.bytes, bytes.length, NULL, NULL);
+    return result;
+}
+
 NSString *SGConnectRawDiscoverySnapshot(void) {
     @synchronized (sg_probeLock) {
         if (!sg_hookedSendTo && !sg_hookedSendMsg && !sg_hookedSend
-            && !sg_hookedRecvFrom && !sg_hookedRecvMsg && !sg_hookedRecv) return @"Spotify socket hooks unavailable.";
+            && !sg_hookedRecvFrom && !sg_hookedRecvMsg && !sg_hookedRecv
+            && !sg_hookedRead && !sg_hookedReadV) return @"Spotify socket hooks unavailable.";
         NSMutableOrderedSet<NSString *> *names = [NSMutableOrderedSet orderedSet];
         for (NSDictionary *target in sg_bonjourTargets) [names addObject:target[@"name"]];
         NSString *attempt = sg_attempts
             ? [NSString stringWithFormat:@"%lu query attempt(s). Last: %@", (unsigned long)sg_attempts, sg_lastAttempt]
             : @"No Spotify _spotify-connect multicast query observed yet.";
         NSString *targets = names.count ? [names.array componentsJoinedByString:@", "] : @"none resolved";
-        return [NSString stringWithFormat:@"%@\nBonjour unicast targets: %@\nResponses injected: %lu\nInjected responses read by Spotify: %lu",
-                attempt, targets, (unsigned long)sg_injectedResponses, (unsigned long)sg_receivedInjectedResponses];
+        NSString *receiveHooks = [NSString stringWithFormat:@"recvfrom=%@ recvmsg=%@ recv=%@ read=%@ readv=%@",
+                                  sg_hookedRecvFrom ? @"on" : @"off", sg_hookedRecvMsg ? @"on" : @"off",
+                                  sg_hookedRecv ? @"on" : @"off", sg_hookedRead ? @"on" : @"off",
+                                  sg_hookedReadV ? @"on" : @"off"];
+        return [NSString stringWithFormat:@"%@\nBonjour unicast targets: %@\nResponses injected: %lu\nInjected responses read by Spotify: %lu\nReceive hooks: %@",
+                attempt, targets, (unsigned long)sg_injectedResponses, (unsigned long)sg_receivedInjectedResponses, receiveHooks];
     }
 }
 
@@ -371,6 +401,8 @@ NSString *SGConnectRawDiscoverySnapshot(void) {
     sg_hookedRecvFrom = SGRebindImport("recvfrom", probeRecvFrom, (void **)&sg_originalRecvFrom) && sg_originalRecvFrom;
     sg_hookedRecvMsg = SGRebindImport("recvmsg", probeRecvMsg, (void **)&sg_originalRecvMsg) && sg_originalRecvMsg;
     sg_hookedRecv = SGRebindImport("recv", probeRecv, (void **)&sg_originalRecv) && sg_originalRecv;
+    sg_hookedRead = SGRebindImport("read", probeRead, (void **)&sg_originalRead) && sg_originalRead;
+    sg_hookedReadV = SGRebindImport("readv", probeReadV, (void **)&sg_originalReadV) && sg_originalReadV;
     dispatch_async(dispatch_get_main_queue(), ^{
         sg_targetBrowser = [SGConnectTargetBrowser new];
         [sg_targetBrowser start];
