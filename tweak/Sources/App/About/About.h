@@ -58,6 +58,8 @@ BOOL SGSigningOpensFromLockScreen(void);     // YES when unreadable, so a build 
 SGModRow *SGSigningWarningRow(void);          // nil while the signature is sound
 void SGCheckSigningOnce(void);
 void SGShowSigningFixIfPending(void);   // the sheet the tour held back, if any
+NSString *SGMulticastDiagnostic(void);  // current task entitlement plus kernel mDNS multicast checks
+void SGShowMulticastDiagnostic(void);
 
 // Backup.m: the settings out to a JSON file through the share sheet, and back in from one, replacing
 // what is set and restarting.

@@ -46,6 +46,8 @@ UIViewController *SGAboutPage(void) {
             updates,
             SGStatRow(@"Version", ^NSString *{ return @(SG_VERSION); }),
             SGStatRow(@"Spotify", ^NSString *{ return spotify; }),
+            withSymbol(SGActionRow(@"Test local network access", @"Check multicast access used for Cast discovery", ^{ SGShowMulticastDiagnostic(); }),
+                       @"antenna.radiowaves.left.and.right"),
         ]),
         SGSection(nil, @[
             withSymbol(SGLinkRow(@"Website", nil, SGSiteURL), @"safari"),
