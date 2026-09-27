@@ -115,7 +115,7 @@ void SGShowMulticastDiagnostic(void) {
 @property (nonatomic, strong) NSNetServiceBrowser *browser;
 @property (nonatomic, strong) NSMutableOrderedSet<NSString *> *names;
 @property (nonatomic, strong) UIAlertController *alert;
-@property (nonatomic, strong) UIAlertAction *copyAction;
+@property (nonatomic, strong) UIAlertAction *resultAction;
 @property (nonatomic, copy) NSString *result;
 @property (nonatomic, copy) NSString *error;
 @property (nonatomic, assign) BOOL finished;
@@ -155,7 +155,7 @@ static SGConnectBonjourProbe *sgConnectBonjourProbe;
     self.result = [NSString stringWithFormat:@"Bonjour _spotify-connect._tcp:\n%@", detail];
     SGLog(@"Connect Bonjour diagnostic: %@", self.result);
     self.alert.message = self.result;
-    self.copyAction.enabled = YES;
+    self.resultAction.enabled = YES;
     [self stop];
 }
 
@@ -186,7 +186,7 @@ void SGShowConnectBonjourDiagnostic(void) {
         UIPasteboard.generalPasteboard.string = weakAlert.message;
     }];
     copy.enabled = NO;
-    probe.copyAction = copy;
+    probe.resultAction = copy;
     [alert addAction:copy];
     [alert addAction:[UIAlertAction actionWithTitle:@"Done" style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
         [weakProbe stop];
