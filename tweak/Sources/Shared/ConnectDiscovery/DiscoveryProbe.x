@@ -13,14 +13,22 @@
 static ssize_t (*sg_originalSendTo)(int, const void *, size_t, int, const struct sockaddr *, socklen_t);
 static ssize_t (*sg_originalSendMsg)(int, const struct msghdr *, int);
 static ssize_t (*sg_originalSend)(int, const void *, size_t, int);
+static ssize_t (*sg_originalRecvFrom)(int, void *, size_t, int, struct sockaddr *, socklen_t *);
+static ssize_t (*sg_originalRecvMsg)(int, struct msghdr *, int);
+static ssize_t (*sg_originalRecv)(int, void *, size_t, int);
 static NSObject *sg_probeLock;
 static NSString *sg_lastAttempt;
 static NSUInteger sg_attempts;
 static BOOL sg_hookedSendTo;
 static BOOL sg_hookedSendMsg;
 static BOOL sg_hookedSend;
+static BOOL sg_hookedRecvFrom;
+static BOOL sg_hookedRecvMsg;
+static BOOL sg_hookedRecv;
 static NSMutableArray<NSDictionary *> *sg_bonjourTargets;
 static NSUInteger sg_injectedResponses;
+static NSUInteger sg_receivedInjectedResponses;
+static NSMutableArray<NSDictionary *> *sg_injectedPackets;
 static CFTimeInterval sg_lastBridgeAttempt;
 static dispatch_queue_t sg_bridgeQueue;
 
@@ -32,6 +40,68 @@ static dispatch_queue_t sg_bridgeQueue;
 @end
 
 static SGConnectTargetBrowser *sg_targetBrowser;
+
+static void rememberInjectedPacket(const void *bytes, size_t length, const struct sockaddr_in *source) {
+    if (!bytes || length < 12 || !source) return;
+    NSDictionary *packet = @{
+        @"bytes": [NSData dataWithBytes:bytes length:length],
+        @"source": [NSData dataWithBytes:source length:sizeof(*source)],
+        @"time": @(CACurrentMediaTime())
+    };
+    @synchronized (sg_probeLock) {
+        CFTimeInterval now = CACurrentMediaTime();
+        NSIndexSet *expired = [sg_injectedPackets indexesOfObjectsPassingTest:^BOOL(NSDictionary *entry, NSUInteger idx, BOOL *stop) {
+            return now - [entry[@"time"] doubleValue] > 15.0;
+        }];
+        [sg_injectedPackets removeObjectsAtIndexes:expired];
+        [sg_injectedPackets addObject:packet];
+    }
+}
+
+static BOOL isLoopbackSource(const struct sockaddr *source, socklen_t length) {
+    if (!source) return NO;
+    if (source->sa_family == AF_INET && length >= sizeof(struct sockaddr_in))
+        return ntohl(((const struct sockaddr_in *)source)->sin_addr.s_addr) == INADDR_LOOPBACK;
+    if (source->sa_family == AF_INET6 && length >= sizeof(struct sockaddr_in6))
+        return IN6_IS_ADDR_LOOPBACK(&((const struct sockaddr_in6 *)source)->sin6_addr);
+    return NO;
+}
+
+static BOOL matchInjectedPacket(const void *bytes, size_t length, struct sockaddr *source, socklen_t *sourceLength) {
+    if (!bytes || length < 12 || !( ((const unsigned char *)bytes)[2] & 0x80 )) return NO;
+    @synchronized (sg_probeLock) {
+        CFTimeInterval now = CACurrentMediaTime();
+        for (NSInteger i = (NSInteger)sg_injectedPackets.count - 1; i >= 0; i--) {
+            NSDictionary *entry = sg_injectedPackets[(NSUInteger)i];
+            if (now - [entry[@"time"] doubleValue] > 15.0) {
+                [sg_injectedPackets removeObjectAtIndex:(NSUInteger)i];
+                continue;
+            }
+            NSData *expected = entry[@"bytes"];
+            if (expected.length != length || memcmp(expected.bytes, bytes, length) != 0) continue;
+
+            if (source && sourceLength && isLoopbackSource(source, *sourceLength)) {
+                const struct sockaddr_in *ipv4 = [entry[@"source"] bytes];
+                if (source->sa_family == AF_INET6 && *sourceLength >= sizeof(struct sockaddr_in6)) {
+                    struct sockaddr_in6 mapped = {0};
+                    mapped.sin6_family = AF_INET6;
+                    mapped.sin6_port = ipv4->sin_port;
+                    mapped.sin6_addr.s6_addr[10] = 0xff;
+                    mapped.sin6_addr.s6_addr[11] = 0xff;
+                    memcpy(&mapped.sin6_addr.s6_addr[12], &ipv4->sin_addr, sizeof(ipv4->sin_addr));
+                    memcpy(source, &mapped, sizeof(mapped));
+                    *sourceLength = sizeof(mapped);
+                } else if (source->sa_family == AF_INET && *sourceLength >= sizeof(struct sockaddr_in)) {
+                    memcpy(source, ipv4, sizeof(*ipv4));
+                    *sourceLength = sizeof(*ipv4);
+                }
+            }
+            sg_receivedInjectedResponses++;
+            return YES;
+        }
+    }
+    return NO;
+}
 
 static BOOL containsConnectQuestion(const void *bytes, size_t length) {
     static const char needle[] = "_spotify-connect";
@@ -162,6 +232,7 @@ static void bridgeFailedQuery(int fd, NSData *query) {
                                   (struct sockaddr *)&loopback, sizeof(loopback));
             }
             if (injected == received) {
+                rememberInjectedPacket(response, (size_t)received, target);
                 @synchronized (sg_probeLock) { sg_injectedResponses++; }
                 SGLog(@"Connect unicast bridge: injected %ld-byte response from %@", (long)received, entry[@"name"]);
             }
@@ -243,27 +314,63 @@ static ssize_t probeSend(int fd, const void *bytes, size_t length, int flags) {
     return result;
 }
 
+static ssize_t probeRecvFrom(int fd, void *bytes, size_t length, int flags,
+                             struct sockaddr *source, socklen_t *sourceLength) {
+    ssize_t result = sg_originalRecvFrom(fd, bytes, length, flags, source, sourceLength);
+    if (result > 0) matchInjectedPacket(bytes, (size_t)result, source, sourceLength);
+    return result;
+}
+
+static ssize_t probeRecvMsg(int fd, struct msghdr *message, int flags) {
+    ssize_t result = sg_originalRecvMsg(fd, message, flags);
+    if (result <= 0 || !message) return result;
+    NSMutableData *bytes = [NSMutableData dataWithLength:(NSUInteger)result];
+    size_t copied = 0;
+    for (int i = 0; i < message->msg_iovlen && copied < (size_t)result; i++) {
+        size_t part = MIN(message->msg_iov[i].iov_len, (size_t)result - copied);
+        memcpy((char *)bytes.mutableBytes + copied, message->msg_iov[i].iov_base, part);
+        copied += part;
+    }
+    if (copied == (size_t)result) {
+        socklen_t sourceLength = message->msg_namelen;
+        matchInjectedPacket(bytes.bytes, bytes.length, message->msg_name, &sourceLength);
+        message->msg_namelen = sourceLength;
+    }
+    return result;
+}
+
+static ssize_t probeRecv(int fd, void *bytes, size_t length, int flags) {
+    ssize_t result = sg_originalRecv(fd, bytes, length, flags);
+    if (result > 0) matchInjectedPacket(bytes, (size_t)result, NULL, NULL);
+    return result;
+}
+
 NSString *SGConnectRawDiscoverySnapshot(void) {
     @synchronized (sg_probeLock) {
-        if (!sg_hookedSendTo && !sg_hookedSendMsg && !sg_hookedSend) return @"Spotify socket hooks unavailable.";
+        if (!sg_hookedSendTo && !sg_hookedSendMsg && !sg_hookedSend
+            && !sg_hookedRecvFrom && !sg_hookedRecvMsg && !sg_hookedRecv) return @"Spotify socket hooks unavailable.";
         NSMutableOrderedSet<NSString *> *names = [NSMutableOrderedSet orderedSet];
         for (NSDictionary *target in sg_bonjourTargets) [names addObject:target[@"name"]];
         NSString *attempt = sg_attempts
             ? [NSString stringWithFormat:@"%lu query attempt(s). Last: %@", (unsigned long)sg_attempts, sg_lastAttempt]
             : @"No Spotify _spotify-connect multicast query observed yet.";
         NSString *targets = names.count ? [names.array componentsJoinedByString:@", "] : @"none resolved";
-        return [NSString stringWithFormat:@"%@\nBonjour unicast targets: %@\nResponses injected: %lu",
-                attempt, targets, (unsigned long)sg_injectedResponses];
+        return [NSString stringWithFormat:@"%@\nBonjour unicast targets: %@\nResponses injected: %lu\nInjected responses read by Spotify: %lu",
+                attempt, targets, (unsigned long)sg_injectedResponses, (unsigned long)sg_receivedInjectedResponses];
     }
 }
 
 %ctor {
     sg_probeLock = [NSObject new];
     sg_bonjourTargets = [NSMutableArray array];
+    sg_injectedPackets = [NSMutableArray array];
     sg_bridgeQueue = dispatch_queue_create("com.spotifyglass.connect-unicast-bridge", DISPATCH_QUEUE_SERIAL);
     sg_hookedSendTo = SGRebindImport("sendto", probeSendTo, (void **)&sg_originalSendTo) && sg_originalSendTo;
     sg_hookedSendMsg = SGRebindImport("sendmsg", probeSendMsg, (void **)&sg_originalSendMsg) && sg_originalSendMsg;
     sg_hookedSend = SGRebindImport("send", probeSend, (void **)&sg_originalSend) && sg_originalSend;
+    sg_hookedRecvFrom = SGRebindImport("recvfrom", probeRecvFrom, (void **)&sg_originalRecvFrom) && sg_originalRecvFrom;
+    sg_hookedRecvMsg = SGRebindImport("recvmsg", probeRecvMsg, (void **)&sg_originalRecvMsg) && sg_originalRecvMsg;
+    sg_hookedRecv = SGRebindImport("recv", probeRecv, (void **)&sg_originalRecv) && sg_originalRecv;
     dispatch_async(dispatch_get_main_queue(), ^{
         sg_targetBrowser = [SGConnectTargetBrowser new];
         [sg_targetBrowser start];
