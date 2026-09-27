@@ -109,7 +109,12 @@ FILES+=("$GROUPS_DYLIB")
 
 echo "==> injecting"
 # -w drops the Watch app: its companion-app key would still name com.spotify.client and block the install.
-cyan -i "$IN" -o "$OUT" -f "${FILES[@]}" -l "$ROOT/plist/liquid-glass.plist" ${BUNDLE_ID:+-b "$BUNDLE_ID"} ${NAME:+-n "$NAME"} ${ICON:+-k "$ICON"} -w -s --overwrite
+unzip -p "$IN" "${APP_DIR}Info.plist" > "$ROOT/out/.info.plist"
+python3 "$ROOT/scripts/merge-local-network-plist.py" "$ROOT/out/.info.plist" \
+  "$ROOT/plist/liquid-glass.plist" "$ROOT/out/.injection.plist"
+rm -f "$ROOT/out/.info.plist"
+cyan -i "$IN" -o "$OUT" -f "${FILES[@]}" -l "$ROOT/out/.injection.plist" ${BUNDLE_ID:+-b "$BUNDLE_ID"} ${NAME:+-n "$NAME"} ${ICON:+-k "$ICON"} -w -s --overwrite
+rm -f "$ROOT/out/.injection.plist"
 
 echo "==> loading the App Group shim in the home screen widget"
 WIDGET_BIN="${APP_DIR}PlugIns/WidgetExtension.appex/WidgetExtension"

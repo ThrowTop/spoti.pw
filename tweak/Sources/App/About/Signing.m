@@ -10,192 +10,38 @@
 #import "Settings/SGPageStyle.h"
 #import "About.h"
 #import "App/Onboarding/Onboarding.h"
-#import "Shared/ConnectDiscovery/DiscoveryProbe.h"
 #import <dlfcn.h>
-#import <errno.h>
-#import <netinet/in.h>
-#import <string.h>
-#import <sys/socket.h>
-#import <unistd.h>
 
 NSString *const SGSigningHelpURL = @"https://github.com/skopevoj/spoti.pw#signing-it-yourself";
 
 static NSString *const kWarned = @"spotifyglass.signing.warned";
 static BOOL sg_fixPending;
 
-static id SGSigningEntitlement(NSString *name) {
-    void *security = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_LAZY);
-    if (!security) return nil;
-    CFTypeRef (*createFromSelf)(CFAllocatorRef) = dlsym(security, "SecTaskCreateFromSelf");
-    CFTypeRef (*copyValue)(CFTypeRef, CFStringRef, CFErrorRef *) = dlsym(security, "SecTaskCopyValueForEntitlement");
-    if (!createFromSelf || !copyValue) return nil;
-    CFTypeRef task = createFromSelf(NULL);
-    if (!task) return nil;
-    CFTypeRef value = copyValue(task, (__bridge CFStringRef)name, NULL);
-    CFRelease(task);
-    return value ? CFBridgingRelease(value) : nil;
-}
-
 // SecTaskCopyValueForEntitlement is not in the iOS SDK, so it is resolved at runtime like the rest
-// of the private API the mod uses. A build that cannot read an entitlement returns nil.
+// of the private API the mod uses. A build that cannot read its own entitlement stays quiet.
 NSString *SGSigningAppIdentifier(void) {
     static NSString *cached;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        id value = SGSigningEntitlement(@"application-identifier");
-        if ([value isKindOfClass:NSString.class]) {
-            NSString *identifier = value;
+        void *security = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_LAZY);
+        if (!security) return;
+        CFTypeRef (*createFromSelf)(CFAllocatorRef) = dlsym(security, "SecTaskCreateFromSelf");
+        CFTypeRef (*copyValue)(CFTypeRef, CFStringRef, CFErrorRef *) = dlsym(security, "SecTaskCopyValueForEntitlement");
+        if (!createFromSelf || !copyValue) return;
+        CFTypeRef task = createFromSelf(NULL);
+        if (!task) return;
+        CFTypeRef value = copyValue(task, CFSTR("application-identifier"), NULL);
+        CFRelease(task);
+        if (!value) return;
+        if (CFGetTypeID(value) == CFStringGetTypeID()) {
+            NSString *identifier = (__bridge NSString *)value;
             NSRange dot = [identifier rangeOfString:@"."];   // drop the team prefix
             cached = dot.location == NSNotFound ? [identifier copy]
                                                : [identifier substringFromIndex:dot.location + 1];
         }
+        CFRelease(value);
     });
     return cached;
-}
-
-// The entitlement plist can claim multicast even when the sideloader's profile doesn't authorize it.
-// Query the running task and exercise the kernel's multicast join/send paths on demand.
-NSString *SGMulticastDiagnostic(void) {
-    id entitlement = SGSigningEntitlement(@"com.apple.developer.networking.multicast");
-    NSString *claim = [entitlement isKindOfClass:NSNumber.class]
-        ? ([entitlement boolValue] ? @"true" : @"false")
-        : (entitlement ? [entitlement description] : @"unavailable");
-    NSString *appID = SGSigningAppIdentifier() ?: @"unavailable";
-
-    int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (fd < 0) {
-        SGLog(@"multicast diagnostic: appID=%@ entitlement=%@ socket=failed errno=%d", appID, claim, errno);
-        return [NSString stringWithFormat:@"App ID: %@\nRuntime multicast entitlement: %@\nSocket: failed (errno %d: %s)",
-                appID, claim, errno, strerror(errno)];
-    }
-
-    struct ip_mreq membership = {0};
-    membership.imr_multiaddr.s_addr = htonl(0xE00000FB); // 224.0.0.251 (mDNS)
-    membership.imr_interface.s_addr = htonl(INADDR_ANY);
-    int joinResult = setsockopt(fd, IPPROTO_IP, IP_ADD_MEMBERSHIP, &membership, sizeof(membership));
-    int joinError = joinResult == 0 ? 0 : errno;
-
-    // A harmless PTR lookup for Cast receivers. This validates outbound multicast too.
-    static const unsigned char query[] = {
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x0B, '_', 'g', 'o', 'o', 'g', 'l', 'e', 'c', 'a', 's', 't',
-        0x04, '_', 't', 'c', 'p', 0x05, 'l', 'o', 'c', 'a', 'l', 0x00,
-        0x00, 0x0C, 0x00, 0x01
-    };
-    struct sockaddr_in target = {0};
-    target.sin_family = AF_INET;
-    target.sin_port = htons(5353);
-    target.sin_addr.s_addr = htonl(0xE00000FB);
-    ssize_t sent = sendto(fd, query, sizeof(query), 0, (struct sockaddr *)&target, sizeof(target));
-    int sendError = sent < 0 ? errno : 0;
-    if (joinResult == 0) setsockopt(fd, IPPROTO_IP, IP_DROP_MEMBERSHIP, &membership, sizeof(membership));
-    close(fd);
-
-    NSString *join = joinResult == 0 ? @"ok" : [NSString stringWithFormat:@"failed (errno %d: %s)", joinError, strerror(joinError)];
-    NSString *send = sent == sizeof(query) ? @"ok" : [NSString stringWithFormat:@"failed (errno %d: %s)", sendError, strerror(sendError)];
-    SGLog(@"multicast diagnostic: appID=%@ entitlement=%@ join=%@ send=%@", appID, claim, join, send);
-    return [NSString stringWithFormat:@"App ID: %@\nRuntime multicast entitlement: %@\nJoin mDNS group: %@\nSend Cast discovery query: %@",
-            appID, claim, join, send];
-}
-
-void SGShowMulticastDiagnostic(void) {
-    NSString *result = SGMulticastDiagnostic();
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Local network diagnostic"
-                                                                   message:result
-                                                            preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Copy result" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-        UIPasteboard.generalPasteboard.string = result;
-    }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Done" style:UIAlertActionStyleCancel handler:nil]];
-    [SGTopController() presentViewController:alert animated:YES completion:nil];
-}
-
-// Apple can browse a named Bonjour service without the broad multicast entitlement. Compare this
-// result with Spotify's Connect sheet to distinguish LAN visibility from Spotify's own discovery.
-@interface SGConnectBonjourProbe : NSObject <NSNetServiceBrowserDelegate>
-@property (nonatomic, strong) NSNetServiceBrowser *browser;
-@property (nonatomic, strong) NSMutableOrderedSet<NSString *> *names;
-@property (nonatomic, strong) UIAlertController *alert;
-@property (nonatomic, strong) UIAlertAction *resultAction;
-@property (nonatomic, copy) NSString *result;
-@property (nonatomic, copy) NSString *error;
-@property (nonatomic, assign) BOOL finished;
-- (void)start;
-- (void)stop;
-@end
-
-static SGConnectBonjourProbe *sgConnectBonjourProbe;
-
-@implementation SGConnectBonjourProbe
-
-- (void)start {
-    self.names = [NSMutableOrderedSet orderedSet];
-    self.browser = [NSNetServiceBrowser new];
-    self.browser.delegate = self;
-    [self.browser searchForServicesOfType:@"_spotify-connect._tcp." inDomain:@"local."];
-
-    __weak typeof(self) weakSelf = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(7 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [weakSelf finish];
-    });
-}
-
-- (void)stop {
-    self.finished = YES;
-    [self.browser stop];
-    self.browser.delegate = nil;
-    self.browser = nil;
-    if (sgConnectBonjourProbe == self) sgConnectBonjourProbe = nil;
-}
-
-- (void)finish {
-    if (self.finished) return;
-    NSArray<NSString *> *names = [self.names.array sortedArrayUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
-    NSString *detail = names.count ? [names componentsJoinedByString:@"\n"] : @"No Spotify Connect services found.";
-    if (self.error) detail = [detail stringByAppendingFormat:@"\nBrowser error: %@", self.error];
-    self.result = [NSString stringWithFormat:@"Bonjour _spotify-connect._tcp:\n%@\n\nSpotify's own mDNS:\n%@",
-                  detail, SGConnectRawDiscoverySnapshot()];
-    SGLog(@"Connect Bonjour diagnostic: %@", self.result);
-    self.alert.message = self.result;
-    self.resultAction.enabled = YES;
-    [self stop];
-}
-
-- (void)netServiceBrowser:(NSNetServiceBrowser *)browser didFindService:(NSNetService *)service moreComing:(BOOL)moreComing {
-    [self.names addObject:service.name];
-}
-
-- (void)netServiceBrowser:(NSNetServiceBrowser *)browser didNotSearch:(NSDictionary<NSString *, NSNumber *> *)errorDict {
-    self.error = errorDict.description;
-    [self finish];
-}
-
-@end
-
-void SGShowConnectBonjourDiagnostic(void) {
-    UIViewController *top = SGTopController();
-    if (!top) return;
-    [sgConnectBonjourProbe stop];
-    SGConnectBonjourProbe *probe = [SGConnectBonjourProbe new];
-    sgConnectBonjourProbe = probe;
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Spotify Connect discovery"
-                                                                   message:@"Looking for nearby receivers for seven seconds…"
-                                                            preferredStyle:UIAlertControllerStyleAlert];
-    probe.alert = alert;
-    __weak SGConnectBonjourProbe *weakProbe = probe;
-    __weak UIAlertController *weakAlert = alert;
-    UIAlertAction *copy = [UIAlertAction actionWithTitle:@"Copy result" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-        UIPasteboard.generalPasteboard.string = weakAlert.message;
-    }];
-    copy.enabled = NO;
-    probe.resultAction = copy;
-    [alert addAction:copy];
-    [alert addAction:[UIAlertAction actionWithTitle:@"Done" style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
-        [weakProbe stop];
-    }]];
-    [top presentViewController:alert animated:YES completion:^{
-        [probe start];
-    }];
 }
 
 // Unreadable counts as fine: a guess here would cry wolf at a build that works.
