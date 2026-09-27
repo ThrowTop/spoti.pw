@@ -22,6 +22,7 @@ static ssize_t (*sg_originalReadV)(int, const struct iovec *, int);
 static NSObject *sg_probeLock;
 static NSString *sg_lastAttempt;
 static NSUInteger sg_attempts;
+static NSUInteger sg_bridgedSendSuccesses;
 static BOOL sg_hookedSendTo;
 static BOOL sg_hookedSendMsg;
 static BOOL sg_hookedSend;
@@ -191,17 +192,19 @@ static BOOL isMulticastDNS(const struct sockaddr *address, socklen_t length) {
 // ephemeral unicast socket (so its answer comes back unicast), then inject the DNS answer into
 // Spotify's own socket on loopback. Unicast and loopback UDP are permitted without Apple's multicast
 // entitlement; this only runs after Spotify's matching multicast send has failed.
-static void bridgeFailedQuery(int fd, NSData *query) {
+static BOOL bridgeFailedQuery(int fd, NSData *query) {
     NSArray<NSDictionary *> *targets;
     CFTimeInterval now = CACurrentMediaTime();
+    int retainedFD = -1;
     @synchronized (sg_probeLock) {
-        if (!sg_bonjourTargets.count || now - sg_lastBridgeAttempt < 1.0) return;
+        if (!sg_bonjourTargets.count) return NO;
+        // Another failed send already started a bridge round for the same receiver.
+        if (now - sg_lastBridgeAttempt < 1.0) return YES;
+        retainedFD = dup(fd);
+        if (retainedFD < 0) return NO;
         sg_lastBridgeAttempt = now;
         targets = [sg_bonjourTargets copy];
     }
-
-    int retainedFD = dup(fd);
-    if (retainedFD < 0) return;
     dispatch_async(sg_bridgeQueue, ^{
         for (NSDictionary *entry in targets) {
             NSData *addressData = entry[@"address"];
@@ -244,6 +247,7 @@ static void bridgeFailedQuery(int fd, NSData *query) {
         }
         close(retainedFD);
     });
+    return YES;
 }
 
 static void recordAttempt(int fd, NSString *function, ssize_t result, int error) {
@@ -273,7 +277,11 @@ static ssize_t probeSendTo(int fd, const void *bytes, size_t length, int flags,
     int savedError = errno;
     if (matching) {
         recordAttempt(fd, @"sendto", result, savedError);
-        if (result < 0) bridgeFailedQuery(fd, [NSData dataWithBytes:bytes length:length]);
+        if (result < 0 && bridgeFailedQuery(fd, [NSData dataWithBytes:bytes length:length])) {
+            @synchronized (sg_probeLock) { sg_bridgedSendSuccesses++; }
+            errno = savedError;
+            return (ssize_t)length;
+        }
     }
     errno = savedError;
     return result;
@@ -296,7 +304,11 @@ static ssize_t probeSendMsg(int fd, const struct msghdr *message, int flags) {
         if (result < 0) {
             NSMutableData *query = [NSMutableData data];
             for (int i = 0; i < message->msg_iovlen; i++) [query appendBytes:message->msg_iov[i].iov_base length:message->msg_iov[i].iov_len];
-            bridgeFailedQuery(fd, query);
+            if (bridgeFailedQuery(fd, query)) {
+                @synchronized (sg_probeLock) { sg_bridgedSendSuccesses++; }
+                errno = savedError;
+                return (ssize_t)query.length;
+            }
         }
     }
     errno = savedError;
@@ -313,7 +325,11 @@ static ssize_t probeSend(int fd, const void *bytes, size_t length, int flags) {
     int savedError = errno;
     if (matching) {
         recordAttempt(fd, @"send", result, savedError);
-        if (result < 0) bridgeFailedQuery(fd, [NSData dataWithBytes:bytes length:length]);
+        if (result < 0 && bridgeFailedQuery(fd, [NSData dataWithBytes:bytes length:length])) {
+            @synchronized (sg_probeLock) { sg_bridgedSendSuccesses++; }
+            errno = savedError;
+            return (ssize_t)length;
+        }
     }
     errno = savedError;
     return result;
@@ -385,8 +401,9 @@ NSString *SGConnectRawDiscoverySnapshot(void) {
                                   sg_hookedRecvFrom ? @"on" : @"off", sg_hookedRecvMsg ? @"on" : @"off",
                                   sg_hookedRecv ? @"on" : @"off", sg_hookedRead ? @"on" : @"off",
                                   sg_hookedReadV ? @"on" : @"off"];
-        return [NSString stringWithFormat:@"%@\nBonjour unicast targets: %@\nResponses injected: %lu\nInjected responses read by Spotify: %lu\nReceive hooks: %@",
-                attempt, targets, (unsigned long)sg_injectedResponses, (unsigned long)sg_receivedInjectedResponses, receiveHooks];
+        return [NSString stringWithFormat:@"%@\nBonjour unicast targets: %@\nFailed multicast sends reported as bridged: %lu\nResponses injected: %lu\nInjected responses read by Spotify: %lu\nReceive hooks: %@",
+                attempt, targets, (unsigned long)sg_bridgedSendSuccesses,
+                (unsigned long)sg_injectedResponses, (unsigned long)sg_receivedInjectedResponses, receiveHooks];
     }
 }
 
