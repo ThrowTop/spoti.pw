@@ -48,7 +48,7 @@ UIViewController *SGAboutPage(void) {
             SGStatRow(@"Spotify", ^NSString *{ return spotify; }),
             withSymbol(SGActionRow(@"Test local network access", @"Check multicast access used for Cast discovery", ^{ SGShowMulticastDiagnostic(); }),
                        @"antenna.radiowaves.left.and.right"),
-            withSymbol(SGActionRow(@"Test Connect discovery", @"Browse for nearby Spotify Connect receivers", ^{ SGShowConnectBonjourDiagnostic(); }),
+            withSymbol(SGActionRow(@"Test Connect discovery", @"Open Connect first, then compare Spotify's mDNS with Bonjour", ^{ SGShowConnectBonjourDiagnostic(); }),
                        @"hifispeaker"),
         ]),
         SGSection(nil, @[

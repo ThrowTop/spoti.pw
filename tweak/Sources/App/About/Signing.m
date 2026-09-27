@@ -10,6 +10,7 @@
 #import "Settings/SGPageStyle.h"
 #import "About.h"
 #import "App/Onboarding/Onboarding.h"
+#import "Shared/ConnectDiscovery/DiscoveryProbe.h"
 #import <dlfcn.h>
 #import <errno.h>
 #import <netinet/in.h>
@@ -152,7 +153,8 @@ static SGConnectBonjourProbe *sgConnectBonjourProbe;
     NSArray<NSString *> *names = [self.names.array sortedArrayUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
     NSString *detail = names.count ? [names componentsJoinedByString:@"\n"] : @"No Spotify Connect services found.";
     if (self.error) detail = [detail stringByAppendingFormat:@"\nBrowser error: %@", self.error];
-    self.result = [NSString stringWithFormat:@"Bonjour _spotify-connect._tcp:\n%@", detail];
+    self.result = [NSString stringWithFormat:@"Bonjour _spotify-connect._tcp:\n%@\n\nSpotify's own mDNS:\n%@",
+                  detail, SGConnectRawDiscoverySnapshot()];
     SGLog(@"Connect Bonjour diagnostic: %@", self.result);
     self.alert.message = self.result;
     self.resultAction.enabled = YES;
