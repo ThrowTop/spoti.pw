@@ -104,6 +104,18 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
+      - name: Delete temporary bootstrap IPA once inputs are saved
+        env:
+          BOOTSTRAP_URL: ${{ secrets.KIT_BOOTSTRAP_IPA_URL }}
+        run: |
+          if [ -n "$BOOTSTRAP_URL" ]; then
+            code=$(curl -sS --retry 3 -X DELETE "$BOOTSTRAP_URL" -o /dev/null -w '%{http_code}')
+            case "$code" in
+              200|204|404|410) echo 'Temporary bootstrap IPA is removed' ;;
+              *) echo "::error::Filebin cleanup returned HTTP $code"; exit 1 ;;
+            esac
+          fi
+
       - name: Restore Theos and its compiler support tools
         id: theos
         uses: actions/cache/restore@v4

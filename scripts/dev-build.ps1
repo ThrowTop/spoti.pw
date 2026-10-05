@@ -68,8 +68,8 @@ try {
     $bootstrapRecord = Join-Path $repoRoot 'out/bootstrap-upload.json'
     if (Test-Path -LiteralPath $bootstrapRecord) {
         $previousUpload = Get-Content -LiteralPath $bootstrapRecord -Raw | ConvertFrom-Json
-        curl.exe -fsS -X DELETE $previousUpload.url -o NUL
-        if ($LASTEXITCODE -ne 0) { throw 'The IPA was built, but Filebin cleanup failed. Run the command again to retry cleanup.' }
+        $deleteStatus = curl.exe -sS -X DELETE $previousUpload.url -o NUL -w '%{http_code}'
+        if ($LASTEXITCODE -ne 0 -or $deleteStatus -notin @('200', '204', '404', '410')) { throw 'The IPA was built, but Filebin cleanup failed. Run the command again to retry cleanup.' }
         gh secret delete KIT_BOOTSTRAP_IPA_URL
         if ($LASTEXITCODE -ne 0) { throw 'The IPA was built, but the bootstrap secret could not be deleted.' }
         Remove-Item -LiteralPath $bootstrapRecord

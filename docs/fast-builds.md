@@ -45,8 +45,9 @@ Only the first build needs the full decrypted IPA on the Mac runner:
 ```
 
 This uploads the supplied IPA to a random Filebin URL, stores that URL as a GitHub secret, and
-sets `KIT_BASE_SHA256`. After a successful build and download, it deletes the remote file and
-URL secret. Actions extracts the flag table, app metadata and icon catalog. **The executable
+sets `KIT_BASE_SHA256`. Actions deletes the remote file after saving the derived input artifact;
+the local helper removes the URL secret after a successful patch. Actions extracts the flag table,
+app metadata and icon catalog. **The executable
 and full IPA are not cached or uploaded as Actions artifacts.** Small input bundles and custom
 kits are accessible through this public repository's Actions artifacts; they contain no accounts
 or signing credentials. `-Bootstrap` must wait; it cannot be combined with `-NoWait`. Interrupted

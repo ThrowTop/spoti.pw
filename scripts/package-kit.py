@@ -51,6 +51,9 @@ def main():
     manifest = {
         "format": 1, "version": version, "spotify": inputs["spotify"], "sourceCommit": commit,
         "baseSHA256": inputs["baseSHA256"],
+        "build": {"xcode": subprocess.check_output(["xcodebuild", "-version"], text=True).strip(),
+                  "clang": subprocess.check_output(["xcrun", "--sdk", "iphoneos", "clang", "--version"], text=True).strip(),
+                  "architecture": "arm64"},
         "infoPlist": {"set": overlay, "union": union, "default": {
             "NSLocalNetworkUsageDescription": "Find nearby speakers and devices for Spotify Connect and Cast."}},
         "load": [{"binary": "@main", "dylibs": ["@rpath/SpotifyGlassAppGroups.dylib", "@rpath/spotifyglass.dylib"]},
