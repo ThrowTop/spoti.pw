@@ -49,7 +49,8 @@ sets `KIT_BASE_SHA256`. After a successful build and download, it deletes the re
 URL secret. Actions extracts the flag table, app metadata and icon catalog. **The executable
 and full IPA are not cached or uploaded as Actions artifacts.** Small input bundles and custom
 kits are accessible through this public repository's Actions artifacts; they contain no accounts
-or signing credentials. `-NoWait` cannot perform the cleanup: use the waiting command afterward.
+or signing credentials. `-Bootstrap` must wait; it cannot be combined with `-NoWait`. Interrupted
+bootstraps retain an ignored cleanup record locally; the next successful patch retries cleanup.
 
 Inputs are cached and retained as a recovery artifact for 90 days, renewed on each build. Keep
 a local copy (`gh run download RUN_ID --pattern 'kit-inputs-*' --dir out/input-backup`). After
@@ -71,3 +72,11 @@ to the flag extractor require a new bootstrap, too.
 The Node patcher is a pinned snapshot of `https://chroma.pw/patcher.mjs`, retrieved 2026-10-05,
 with a local base-fingerprint check and custom-build labels. Its archive/Mach-O implementation
 is retained. It performs no HTTP requests; no code is fetched from Chroma at patch time.
+Original snapshot SHA-256: `de20ab1e2407479c0b6e711a46fc7c7b76d9d834270a03e16e7000af50fd61db`.
+
+The workflow verifies the actual arm64 instructions of the reporting/update/promotion stubs.
+To also verify a finished IPA locally (requires Python 3.11+):
+
+```powershell
+python scripts/verify-kit.py CUSTOM-KIT.zip --ipa out/FINISHED.ipa
+```

@@ -106,7 +106,7 @@ jobs:
 
       - name: Restore Theos and its compiler support tools
         id: theos
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: theos
           key: kit-theos-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.config.outputs.xcode }}-${{ env.THEOS_REF }}
@@ -127,7 +127,8 @@ jobs:
           if [ "${#missing[@]}" -gt 0 ]; then brew install "${missing[@]}"; fi
 
       - name: Restore compiled objects and auxiliary binaries
-        uses: actions/cache@v4
+        id: native
+        uses: actions/cache/restore@v4
         with:
           path: |
             tweak/.theos
@@ -139,6 +140,7 @@ jobs:
             kit-native-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.config.outputs.xcode }}-${{ env.THEOS_REF }}-${{ env.KIT_BASE_SHA256 }}-${{ hashFiles('tweak/Makefile', 'vendor/audio/Makefile', 'version.txt') }}-
 
       - name: Compile and package custom kit
+        id: compile
         env:
           KIT_CLEAN: ${{ inputs.clean || 'false' }}
         run: |
@@ -150,6 +152,28 @@ jobs:
           echo "- Source: $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
           echo "- Compile and package: $((SECONDS-started)) seconds" >> "$GITHUB_STEP_SUMMARY"
           echo '- Patch locally with Node 24+: `node scripts/patcher.mjs BASE.ipa KIT.zip out`' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save Theos even after a source compile error
+        if: ${{ !cancelled() && steps.theos.outcome == 'success' && steps.theos.outputs.cache-hit != 'true' && hashFiles('theos/makefiles/common.mk') != '' }}
+        uses: actions/cache/save@v4
+        with:
+          path: theos
+          key: ${{ steps.theos.outputs.cache-primary-key }}
+
+      - name: Checkpoint source timestamps
+        if: ${{ !cancelled() && (steps.compile.outcome == 'success' || steps.compile.outcome == 'failure') }}
+        run: python3 scripts/source-mtimes.py save
+
+      - name: Save compiled objects even after a source compile error
+        if: ${{ !cancelled() && (steps.compile.outcome == 'success' || steps.compile.outcome == 'failure') }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            tweak/.theos
+            vendor/audio/build/ios
+            out/kit-support
+            out/kit-cache
+          key: ${{ steps.native.outputs.cache-primary-key }}
 
       - uses: actions/upload-artifact@v7
         with:

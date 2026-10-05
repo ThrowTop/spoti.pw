@@ -12,6 +12,9 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 Push-Location $repoRoot
 try {
+    if ($Bootstrap -and $NoWait) { throw '-Bootstrap must wait so it can delete the temporary IPA upload.' }
+    $nodeVersion = node --version
+    if ($LASTEXITCODE -ne 0 -or [int]($nodeVersion.TrimStart('v').Split('.')[0]) -lt 24) { throw 'Install Node 24 or newer before building.' }
     $ipaPath = (Resolve-Path -LiteralPath $Ipa).Path
     if (-not $Kit) {
         if ((git branch --show-current) -ne $Ref) { throw "Check out $Ref before building, or pass -Ref with your current branch." }
@@ -29,21 +32,25 @@ try {
             if ($LASTEXITCODE -ne 0) { throw 'Bootstrap upload failed.' }
             $uploadUrl | gh secret set KIT_BOOTSTRAP_IPA_URL
             if ($LASTEXITCODE -ne 0) { throw 'Could not set bootstrap URL secret.' }
+            New-Item -ItemType Directory -Force -Path (Join-Path $repoRoot 'out') | Out-Null
+            @{ url = $uploadUrl } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $repoRoot 'out/bootstrap-upload.json')
             Write-Host 'Bootstrap IPA uploaded; only derived inputs are retained by Actions.'
         }
         git push -u origin $Ref
         if ($LASTEXITCODE -ne 0) { throw 'Push failed.' }
         $run = $null
         for ($attempt = 0; $attempt -lt 12; $attempt++) {
-            $runs = gh run list --workflow build-kit.yml --branch $Ref --commit $sourceCommit --limit 10 --json databaseId,status,conclusion,url | ConvertFrom-Json
+            $runs = @(gh run list --branch $Ref --commit $sourceCommit --limit 20 --json databaseId,status,conclusion,url,workflowName | ConvertFrom-Json) | Where-Object { $_.workflowName -eq 'Build custom kit' }
             if ($LASTEXITCODE -eq 0 -and $runs.Count -gt 0) { $run = @($runs)[0]; break }
             Start-Sleep -Seconds 3
         }
         if (-not $run -or $Clean -or ($run.status -eq 'completed' -and $run.conclusion -ne 'success')) {
-            gh workflow run build-kit.yml --ref $Ref -f "clean=$($Clean.IsPresent.ToString().ToLowerInvariant())"
+            $workflowId = gh api "repos/$repoName/actions/workflows" --jq '.workflows[] | select(.name == "Build custom kit") | .id'
+            if (-not $workflowId) { throw 'Push a source commit to register the new workflow, then run this command again.' }
+            gh workflow run $workflowId --ref $Ref -f "clean=$($Clean.IsPresent.ToString().ToLowerInvariant())"
             if ($LASTEXITCODE -ne 0) { throw 'Dispatch failed. Push a source commit to trigger the workflow, then run this command again.' }
             Start-Sleep -Seconds 3
-            $runs = gh run list --workflow build-kit.yml --branch $Ref --commit $sourceCommit --limit 10 --json databaseId,status,conclusion,url | ConvertFrom-Json
+            $runs = @(gh run list --branch $Ref --commit $sourceCommit --limit 20 --json databaseId,status,conclusion,url,workflowName | ConvertFrom-Json) | Where-Object { $_.workflowName -eq 'Build custom kit' }
             $run = @($runs)[0]
         }
         Write-Host "Build: $($run.url)"
@@ -55,13 +62,18 @@ try {
         gh run download $run.databaseId --name custom-kit --dir $downloadDir
         if ($LASTEXITCODE -ne 0) { throw 'Kit download failed.' }
         $Kit = (Get-ChildItem -LiteralPath $downloadDir -Filter '*-kit.zip' | Select-Object -First 1).FullName
-        if ($Bootstrap) {
-            curl.exe -fsS -X DELETE $uploadUrl -o NUL
-            gh secret delete KIT_BOOTSTRAP_IPA_URL
-        }
     }
     node (Join-Path $PSScriptRoot 'patcher.mjs') $ipaPath (Resolve-Path -LiteralPath $Kit).Path (Join-Path $repoRoot 'out')
     if ($LASTEXITCODE -ne 0) { throw 'Local patch failed.' }
+    $bootstrapRecord = Join-Path $repoRoot 'out/bootstrap-upload.json'
+    if (Test-Path -LiteralPath $bootstrapRecord) {
+        $previousUpload = Get-Content -LiteralPath $bootstrapRecord -Raw | ConvertFrom-Json
+        curl.exe -fsS -X DELETE $previousUpload.url -o NUL
+        if ($LASTEXITCODE -ne 0) { throw 'The IPA was built, but Filebin cleanup failed. Run the command again to retry cleanup.' }
+        gh secret delete KIT_BOOTSTRAP_IPA_URL
+        if ($LASTEXITCODE -ne 0) { throw 'The IPA was built, but the bootstrap secret could not be deleted.' }
+        Remove-Item -LiteralPath $bootstrapRecord
+    }
 } finally {
     Pop-Location
 }

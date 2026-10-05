@@ -2,6 +2,8 @@
 #import "Core/SGCore.h"
 #import "About.h"
 
+static const NSTimeInterval kFreeLongest = 8 * 86400;
+
 static NSDictionary *profile(void) {
     static NSDictionary *read;
     static dispatch_once_t once;

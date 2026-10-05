@@ -46,4 +46,5 @@ env -u MAKELEVEL gmake -C tweak -j"$(sysctl -n hw.ncpu)" all
 wait "$SUPPORT_PID"
 trap - EXIT
 python3 scripts/package-kit.py
+python3 scripts/verify-kit.py out/*-kit.zip
 python3 scripts/source-mtimes.py save
