@@ -42,7 +42,8 @@ echo "==> compiling tweak incrementally"
 if [ "${KIT_CLEAN:-false}" = true ]; then
   env -u MAKELEVEL gmake -C tweak clean
 fi
-env -u MAKELEVEL gmake -C tweak -j"$(sysctl -n hw.ncpu)" messages=yes all
+# Theos otherwise deletes *.x.m after compiling, forcing every Logos hook to rebuild next time.
+env -u MAKELEVEL gmake -C tweak -j"$(sysctl -n hw.ncpu)" KEEP_LOGOS_INTERMEDIATES=1 messages=yes all
 wait "$SUPPORT_PID"
 trap - EXIT
 python3 scripts/package-kit.py

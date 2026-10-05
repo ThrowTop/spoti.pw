@@ -64,6 +64,8 @@ to the flag extractor require a new bootstrap, too.
 - Pinned Theos checkout and its generated compiler support tools are cached.
 - Theos objects and the audio library are restored; content hashes restore original mtimes for
   unchanged source files, so checkout timestamps do not force a full recompile.
+- `KEEP_LOGOS_INTERMEDIATES=1` retains generated hook files. Without it, Theos deletes those
+  files after each compile and rebuilds every Logos hook on the next run.
 - Xcode build, runner architecture, Theos revision, base IPA, build flags and mod version partition
   the object cache. Changed source still recompiles; a changed header invalidates dependents.
 - Widget, App Group shim and icon compilation are cached separately by their actual inputs.
