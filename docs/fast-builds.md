@@ -77,13 +77,15 @@ Measured on 2026-10-05 with this exact Spotify IPA:
 | Build | Compile + package | Entire Actions job |
 | --- | ---: | ---: |
 | Cold compiler cache, base inputs already prepared | 151 s | 206 s |
-| One Objective-C source file changed, warm caches | 34 s | 64 s |
+| Initial object caching, before retaining Logos intermediates | 34 s | 64 s |
+| One Objective-C source file changed, full warm caches | 22 s | 43 s |
 
-The kit was 6.5 MB. Patching it locally on Windows took 7.4 s and produced a 141.1 MB IPA.
+The kit was 6.5 MB. Patching it locally on Windows took 6.8 s and produced a 141.1 MB IPA.
 Queue time and artifact download add to these numbers. This is a one-file edit measurement;
 changes to shared headers or Swift interfaces can require substantially more compilation.
+The final run's compiler log contains exactly one compiled source file: `App/About/Update.m`.
 Runs: [cold](https://github.com/ThrowTop/spoti.pw/actions/runs/37315454046),
-[one-file edit](https://github.com/ThrowTop/spoti.pw/actions/runs/37316029127).
+[one-file edit](https://github.com/ThrowTop/spoti.pw/actions/runs/37317108423).
 
 The Node patcher is a pinned snapshot of `https://chroma.pw/patcher.mjs`, retrieved 2026-10-05,
 with a local base-fingerprint check and custom-build labels. Its archive/Mach-O implementation
