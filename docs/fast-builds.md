@@ -70,6 +70,19 @@ to the flag extractor require a new bootstrap, too.
 - The tweak uses all available compiler jobs. Auxiliary compilation overlaps on cold builds.
 - New pushes cancel older pending/running builds on this branch.
 
+Measured on 2026-10-05 with this exact Spotify IPA:
+
+| Build | Compile + package | Entire Actions job |
+| --- | ---: | ---: |
+| Cold compiler cache, base inputs already prepared | 151 s | 206 s |
+| One Objective-C source file changed, warm caches | 34 s | 64 s |
+
+The kit was 6.5 MB. Patching it locally on Windows took 7.4 s and produced a 141.1 MB IPA.
+Queue time and artifact download add to these numbers. This is a one-file edit measurement;
+changes to shared headers or Swift interfaces can require substantially more compilation.
+Runs: [cold](https://github.com/ThrowTop/spoti.pw/actions/runs/37315454046),
+[one-file edit](https://github.com/ThrowTop/spoti.pw/actions/runs/37316029127).
+
 The Node patcher is a pinned snapshot of `https://chroma.pw/patcher.mjs`, retrieved 2026-10-05,
 with a local base-fingerprint check and custom-build labels. Its archive/Mach-O implementation
 is retained. It performs no HTTP requests; no code is fetched from Chroma at patch time.

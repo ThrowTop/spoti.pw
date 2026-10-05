@@ -45,7 +45,8 @@ try {
             Start-Sleep -Seconds 3
         }
         if (-not $run -or $Clean -or ($run.status -eq 'completed' -and $run.conclusion -ne 'success')) {
-            $workflowId = gh api "repos/$repoName/actions/workflows" --jq '.workflows[] | select(.name == "Build custom kit") | .id'
+            $workflows = gh api "repos/$repoName/actions/workflows" | ConvertFrom-Json
+            $workflowId = ($workflows.workflows | Where-Object { $_.name -eq 'Build custom kit' } | Select-Object -First 1).id
             if (-not $workflowId) { throw 'Push a source commit to register the new workflow, then run this command again.' }
             gh workflow run $workflowId --ref $Ref -f "clean=$($Clean.IsPresent.ToString().ToLowerInvariant())"
             if ($LASTEXITCODE -ne 0) { throw 'Dispatch failed. Push a source commit to trigger the workflow, then run this command again.' }
