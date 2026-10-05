@@ -1,12 +1,9 @@
-// About: where the build points its user, and whether GitHub has a newer release (Update.m,
-// UpdatePage.m). The status is a string for the Updates row; the page's ticker reads it, so the
-// check needs no callback, and a check that lands posts SGUpdateCheckedNotification for the page
-// that is open at the time. SGCheckForUpdate(NO) respects a six hour cache, SGCheckForUpdate(YES)
-// always asks.
+// Personal builds disable usage, update checks/notices and certificate promotions.
+// Compatibility functions remain for existing callers; they cannot submit requests.
 #import <UIKit/UIKit.h>
 #import "Settings/SGModPage.h"
 
-extern NSString *const SGUpdateURL;   // spoti.pw's; the site and the repo are in Settings/SGPageStyle.h
+extern NSString *const SGUpdateURL;   // empty in personal builds
 extern NSString *const SGUpdateCheckedNotification;   // on the main thread, after a check ends either way
 
 // One line of a release's changelog: what changed, under the heading Release Please put it under,
@@ -34,20 +31,14 @@ void SGCheckForUpdate(BOOL force);
 UIViewController *SGUpdatePage(void);   // UpdatePage.m: the state and the changelog
 UIViewController *SGLicensesPage(void); // Licenses.m: the mod's license and the third-party ones it ships
 
-// Usage.m: the body the check posts to spoti.pw, nil while the switch is off. The key sits outside
-// "spotifyglass." so that Reset all settings neither switches the count off nor undoes an opt-out.
+// Compatibility functions, disabled in personal builds regardless of stored preferences.
 #define SGKeyUsage @"spotipw.usage"
-NSData *SGUsageBody(void);
-BOOL SGUsageOwed(void);        // on, and not yet sent this UTC day
-void SGUsageNoteAsked(void);
-
-// UpdateNotice.m: the sheet a release newer than this build brings on its own, a few seconds after
-// Spotify comes up, once per release. Watched from the settings %ctor; the switch is on the Updates
-// page and takes effect at once.
+NSData *SGUsageBody(void);       // always nil
+BOOL SGUsageOwed(void);          // always NO
+void SGUsageNoteAsked(void);     // no-op
 #define SGKeyUpdateNotice @"spotifyglass.update.notice"
-void SGWatchForUpdates(void);
-BOOL SGUpdateNoticeShown(void);   // this run, so the donate sheet stays out of its way
-
+void SGWatchForUpdates(void);    // no-op
+BOOL SGUpdateNoticeShown(void);  // always NO
 
 // Whether the now playing card on the lock screen can open this build. It depends on the signature,
 // not on the mod: iOS launches by the App ID of the application-identifier entitlement, so a build
@@ -64,14 +55,13 @@ void SGShowSigningFixIfPending(void);   // the sheet the tour held back, if any
 NSArray<SGModRow *> *SGCompatibilityWarningRows(void);   // empty when neither
 void SGCheckCompatibilityOnce(void);
 
-// Certificate.m: how this copy is signed, from the provisioning profile inside the app, and for a free
-// Apple ID's 7-day signature a sheet now and then offering a certificate, worded by spoti.pw.
-NSString *SGCertificateKind(void);   // "free", "paid", "enterprise", "none" (no profile), nil if unreadable
+// Local signing information; certificate promotions and network requests are disabled.
+NSString *SGCertificateKind(void);
 NSDate *SGCertificateExpiry(void);
-SGModRow *SGCertificateRow(void);    // nil unless signed with a free Apple ID
-void SGWatchForCertificate(void);
-BOOL SGCertificateOfferShown(void);  // this run, so the donate sheet stays out of its way
-void SGShowCertificateSheet(NSDictionary *offer, UIImage *logo);   // the sheet itself, for harness/donate too
+SGModRow *SGCertificateRow(void);    // always nil
+void SGWatchForCertificate(void);   // no-op
+BOOL SGCertificateOfferShown(void); // always NO
+void SGShowCertificateSheet(NSDictionary *offer, UIImage *logo); // no-op
 
 // Backup.m: the settings out to a JSON file through the share sheet, and back in from one, replacing
 // what is set and restarting.

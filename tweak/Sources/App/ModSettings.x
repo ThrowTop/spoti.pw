@@ -38,7 +38,6 @@ static SGModRow *pageRow(NSString *title, NSString *symbol, UIViewController *(^
 
 static UIViewController *modSettingsPage(void) {
     // Opening the page is the only thing that asks; the cache keeps it to once every six hours.
-    SGCheckForUpdate(NO);
     NSMutableArray<SGModSection *> *sections = [NSMutableArray array];
     // What no switch can put right leads the page, above the tweaks: a Spotify or a second mod it isn't
     // made for, a build the lock screen cannot open.
@@ -282,7 +281,5 @@ static SGModSettingsRow *ensureDrawerRow(UICollectionView *list) {
     SGRegisterPages();
     SGCheckCompatibilityOnce();
     SGCheckSigningOnce();
-    SGWatchForUpdates();
     SGWatchForDonate();
-    SGWatchForCertificate();
 }
