@@ -60,8 +60,10 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Kit build failed; inspect the linked Actions run.' }
         $downloadDir = Join-Path $repoRoot "out/kits/$($run.databaseId)"
         New-Item -ItemType Directory -Force -Path $downloadDir | Out-Null
-        gh run download $run.databaseId --name custom-kit --dir $downloadDir
-        if ($LASTEXITCODE -ne 0) { throw 'Kit download failed.' }
+        if (-not (Get-ChildItem -LiteralPath $downloadDir -Filter '*-kit.zip')) {
+            gh run download $run.databaseId --name custom-kit --dir $downloadDir
+            if ($LASTEXITCODE -ne 0) { throw 'Kit download failed.' }
+        }
         $Kit = (Get-ChildItem -LiteralPath $downloadDir -Filter '*-kit.zip' | Select-Object -First 1).FullName
     }
     node (Join-Path $PSScriptRoot 'patcher.mjs') $ipaPath (Resolve-Path -LiteralPath $Kit).Path (Join-Path $repoRoot 'out')

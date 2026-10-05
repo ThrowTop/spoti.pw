@@ -14,5 +14,5 @@ NSArray<SGUpdateRelease *> *SGUpdateReleases(void) { return @[]; }
 SGUpdateRelease *SGUpdateNewestRelease(void) { return nil; }
 NSString *SGUpdateVersion(void) { return nil; }
 BOOL SGUpdateIsNewer(NSString *version) { return NO; }
-NSString *SGUpdateStatus(void) { return @"updates managed by custom kits"; }
+NSString *SGUpdateStatus(void) { return @"update checks disabled"; }
 void SGCheckForUpdate(BOOL force) {}
